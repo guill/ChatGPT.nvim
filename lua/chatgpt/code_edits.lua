@@ -125,7 +125,19 @@ local setup_and_mount = vim.schedule_wrap(function(lines, output_lines, ...)
   end
 end)
 
-M.edit_with_instructions = function(output_lines, bufnr, selection, ...)
+local string_to_lines = function(str)
+  local lines = {}
+  for line in (str):gmatch("([^\r\n]*)\n") do
+    table.insert(lines, line)
+  end
+  local last_line = str:match("([^\r\n]+)$")
+  if last_line then
+    table.insert(lines, last_line)
+  end
+  return lines
+end
+
+M.edit_with_instructions = function(output_lines, bufnr, selection, initial_prompt, ...)
   if bufnr == nil then
     bufnr = vim.api.nvim_get_current_buf()
   end
@@ -140,6 +152,29 @@ M.edit_with_instructions = function(output_lines, bufnr, selection, ...)
   local openai_params = Config.options.openai_edit_params
   local use_functions_for_edits = Config.options.use_openai_functions_for_edits
   local settings_panel = Settings.get_settings_panel("edits", openai_params)
+  local update_layout = function()
+    local params = {
+      relative = "editor",
+      position = "50%",
+      size = {
+        width = Config.options.popup_layout.center.width,
+        height = Config.options.popup_layout.center.height,
+      },
+    }
+    local contents = Layout.Box({
+        Layout.Box({
+          Layout.Box(input_window, { grow = 1 }),
+          Layout.Box(instructions_input, { size = 3 + (instructions_input.prompt_lines or 1) }),
+        }, { dir = "col", size = "50%" }),
+        Layout.Box(output_window, { size = "50%" }),
+      }, { dir = "row" })
+    if layout then
+      layout:update(params, contents)
+    else
+      layout = Layout(params, contents)
+    end
+  end
+
   input_window = Popup(Config.options.popup_window)
   output_window = Popup(Config.options.popup_window)
   instructions_input = ChatInput(Config.options.popup_input, {
@@ -149,6 +184,12 @@ M.edit_with_instructions = function(output_lines, bufnr, selection, ...)
         timer:stop()
       end
     end,
+    on_change = vim.schedule_wrap(function(lines)
+      if instructions_input.prompt_lines ~= #lines then
+        instructions_input.prompt_lines = #lines
+        update_layout()
+      end
+    end),
     on_submit = vim.schedule_wrap(function(instruction)
       -- clear input
       vim.api.nvim_buf_set_lines(instructions_input.bufnr, 0, -1, false, { "" })
@@ -179,23 +220,13 @@ M.edit_with_instructions = function(output_lines, bufnr, selection, ...)
     end),
   })
 
-  layout = Layout(
-    {
-      relative = "editor",
-      position = "50%",
-      size = {
-        width = Config.options.popup_layout.center.width,
-        height = Config.options.popup_layout.center.height,
-      },
-    },
-    Layout.Box({
-      Layout.Box({
-        Layout.Box(input_window, { grow = 1 }),
-        Layout.Box(instructions_input, { size = 3 }),
-      }, { dir = "col", size = "50%" }),
-      Layout.Box(output_window, { size = "50%" }),
-    }, { dir = "row" })
-  )
+  if ( initial_prompt ) then
+    local prompt_lines = string_to_lines(initial_prompt)
+    vim.api.nvim_buf_set_lines(instructions_input.bufnr, 0, -1, false, prompt_lines)
+    instructions_input.prompt_lines = #prompt_lines
+  end
+
+  update_layout()
 
   -- accept output window
   for _, mode in ipairs({ "n", "i" }) do
